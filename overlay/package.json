@@ -1,0 +1,18 @@
+{
+  "name": "nerdsidekiq-overlay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Floating interview-hint window for NerdSidekiq",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  },
+  "dependencies": {
+    "github-markdown-css": "^5.6.1",
+    "highlight.js": "^11.12.0",
+    "marked": "^14.1.2"
+  }
+}

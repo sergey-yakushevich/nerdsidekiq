@@ -1,0 +1,137 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 660px; height: 480px;
+    background: #101014;
+    font-family: Menlo, "SF Mono", monospace;
+    color: #e8e8ee;
+    overflow: hidden;
+    position: relative;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* the seeded dot/plus scatter and the pixel title both live here */
+  #art { position: absolute; inset: 0; }
+
+  /* corner brackets */
+  .br { position: absolute; width: 34px; height: 34px; border: 2px solid #3a3a46; }
+  .tl { left: 26px;  top: 56px;    border-right: 0; border-bottom: 0; }
+  .tr { right: 26px; top: 56px;    border-left: 0;  border-bottom: 0; }
+  .bl { left: 26px;  bottom: 74px; border-right: 0; border-top: 0; }
+  .brr{ right: 26px; bottom: 74px; border-left: 0;  border-top: 0; }
+
+  /* the drop hint between the two icon slots */
+  .arrow {
+    position: absolute; left: 246px; top: 236px; width: 168px;
+    text-align: center;
+  }
+  .arrow .line {
+    height: 0; border-top: 3px dashed #6f6f80;
+    margin: 0 6px 0 0; position: relative;
+  }
+  .arrow .line::after {
+    content: ""; position: absolute; right: -3px; top: -7px;
+    border-left: 11px solid #6f6f80;
+    border-top: 7px solid transparent;
+    border-bottom: 7px solid transparent;
+  }
+  .arrow .cap {
+    margin-top: 13px; font-size: 14px; letter-spacing: 0.06em; color: #9a9aab;
+  }
+
+  /* bottom rule + tagline */
+  .rule {
+    position: absolute; left: 30px; right: 30px; bottom: 56px;
+    height: 0; border-top: 1px solid #33333f;
+  }
+  .tag {
+    position: absolute; left: 0; right: 0; bottom: 24px;
+    text-align: center; font-size: 14px; letter-spacing: 0.06em; color: #8d8d9e;
+  }
+  .tag b { color: #cfcfdb; font-weight: 400; }
+</style>
+
+<canvas id="art" width="660" height="480"></canvas>
+
+<div class="br tl"></div><div class="br tr"></div>
+<div class="br bl"></div><div class="br brr"></div>
+
+<div class="arrow">
+  <div class="line"></div>
+  <div class="cap">drag to install</div>
+</div>
+
+<div class="rule"></div>
+<div class="tag">&gt; drag to install _ <b>live hints in your interview</b></div>
+
+<script>
+// 5x7 bitmap font — only the glyphs the title needs.
+const FONT = {
+  N: ["10001","11001","11001","10101","10011","10011","10001"],
+  E: ["11111","10000","10000","11110","10000","10000","11111"],
+  R: ["11110","10001","10001","11110","10100","10010","10001"],
+  D: ["11110","10001","10001","10001","10001","10001","11110"],
+  S: ["01111","10000","10000","01110","00001","00001","11110"],
+  I: ["11111","00100","00100","00100","00100","00100","11111"],
+  K: ["10001","10010","10100","11000","10100","10010","10001"],
+  Q: ["01110","10001","10001","10001","10101","10010","01101"],
+  " ": ["00000","00000","00000","00000","00000","00000","00000"],
+};
+
+const TITLE = "NERD SIDEKIQ";
+const PX = 7;          // size of one font pixel
+const GAP = 1;         // blank columns between glyphs, in font pixels
+const TITLE_TOP = 92;  // baseline-ish top edge of the title block
+
+const cv = document.getElementById("art");
+// Back the canvas at the device scale so the @2x render stays crisp; all the
+// drawing below stays in 660x480 logical coordinates.
+const DPR = window.devicePixelRatio || 1;
+cv.width = 660 * DPR; cv.height = 480 * DPR;
+cv.style.width = "660px"; cv.style.height = "480px";
+const ctx = cv.getContext("2d");
+ctx.scale(DPR, DPR);
+
+// Deterministic scatter so the 1x and 2x renders line up exactly.
+let seed = 20260901;
+function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+
+// --- scattered dots and plus marks (the "space dust") ---
+ctx.fillStyle = "#2e2e3a";
+for (let i = 0; i < 130; i++) {
+  const x = Math.round(rnd() * 660), y = Math.round(rnd() * 480);
+  const s = rnd() < 0.22 ? 3 : 2;
+  ctx.fillRect(x, y, s, s);
+}
+ctx.strokeStyle = "#33333f";
+ctx.lineWidth = 2;
+for (let i = 0; i < 14; i++) {
+  const x = Math.round(rnd() * 620) + 20, y = Math.round(rnd() * 440) + 20, r = 5;
+  ctx.beginPath();
+  ctx.moveTo(x - r, y); ctx.lineTo(x + r, y);
+  ctx.moveTo(x, y - r); ctx.lineTo(x, y + r);
+  ctx.stroke();
+}
+
+// --- pixel title, drawn with a hard drop shadow like the reference ---
+const cols = TITLE.length * (5 + GAP) - GAP;
+const titleW = cols * PX;
+const startX = Math.round((660 - titleW) / 2);
+
+function drawTitle(dx, dy, color) {
+  ctx.fillStyle = color;
+  let cx = startX + dx;
+  for (const ch of TITLE) {
+    const g = FONT[ch];
+    for (let r = 0; r < 7; r++) {
+      for (let c = 0; c < 5; c++) {
+        if (g[r][c] === "1") ctx.fillRect(cx + c * PX, TITLE_TOP + dy + r * PX, PX, PX);
+      }
+    }
+    cx += (5 + GAP) * PX;
+  }
+}
+drawTitle(PX, PX, "#5a5a6b");   // shadow
+drawTitle(0, 0, "#f2f2f7");     // face
+</script>

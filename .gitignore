@@ -1,0 +1,12 @@
+.DS_Store
+.venv/
+__pycache__/
+build/
+dist/
+logs/
+recordings/
+overlay/node_modules/
+overlay/assist.log
+settings.json
+callname.txt
+assets/remote-*.aiff
