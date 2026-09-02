@@ -259,7 +259,7 @@ def chat(model, prompt, schema=None, effort=None, max_tokens=8000):
     kwargs = {"model": model, "max_tokens": max_tokens,
               "messages": [{"role": "user", "content": prompt}]}
     output_config = {}
-    if effort:
+    if effort and "haiku" not in model:   # haiku models reject `effort`
         output_config["effort"] = effort
     if schema:
         output_config["format"] = {"type": "json_schema", "schema": schema}

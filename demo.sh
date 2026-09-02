@@ -10,18 +10,16 @@ mkdir -p assets
 if [ "$LANG_SEL" = "ru" ]; then
   VOICE=Milena
   TEXT="Здравствуйте, это удалённый участник. Договоримся: дедлайн в следующую пятницу, контракт я пришлю в понедельник."
-  NAME="Demo Call RU"
 else
   VOICE=Samantha
   TEXT="Hello, this is the remote participant. Let us agree the deadline is next Friday, and I will send the contract on Monday."
-  NAME="Demo Call EN"
 fi
 AIFF="assets/remote-$LANG_SEL.aiff"
 [ -f "$AIFF" ] || say -v "$VOICE" -o "$AIFF" "$TEXT"
 
 open -a "$PWD/build/NerdSidekiq.app"
 sleep 3
-echo "$NAME" > callname.txt
+echo '{"mode": "transcript", "about": "", "notes_path": ""}' > session.json
 notifyutil -p dev.cyberjosef.nerdsidekiq.start
 sleep 2
 echo ">>> RECORDING — talk over the voice if you want to test your mic <<<"

@@ -4,15 +4,15 @@ import AVFoundation
 import ServiceManagement
 import notify
 
-// NerdSidekiq — one window, two buttons.
-// Start Call -> records mic (L) + system audio (R).
-// Finish Call -> stops, then process_call.py transcribes (OpenAI),
-// summarizes (OpenAI) and saves both notes under one page in Notion.
+// NerdSidekiq — the UI lives in the floating Electron overlay (overlay/).
+// This app records mic (L) + system audio (R), spawns the python loops and
+// the post-call pipeline, and keeps a minimal status window.
 //
-// Headless control (for tests / scripting):
+// The overlay controls the recorder with darwin notifications:
 //   notifyutil -p dev.cyberjosef.nerdsidekiq.start
 //   notifyutil -p dev.cyberjosef.nerdsidekiq.finish
-// The call name is then read from <base>/callname.txt.
+// The session mode + prep config are read from <base>/session.json:
+//   {"mode": "transcript"|"sidekiq"|"prep", "about": "...", "notes_path": "..."}
 
 let baseDir: URL = {
     // .../nerdsidekiq/build/NerdSidekiq.app -> .../nerdsidekiq
@@ -56,7 +56,6 @@ enum Phase: Equatable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var phase: Phase = .idle
-    @Published var callName: String = ""
     @Published var status: String = "Ready."
     @Published var notionURL: String? = nil
     @Published var micLevel: Float = 0
@@ -76,7 +75,13 @@ final class AppModel: ObservableObject {
         didSet { saveSettings() }
     }
     @Published var onboardingDone: Bool = false {
-        didSet { saveSettings() }
+        didSet {
+            saveSettings()
+            if onboardingDone && !loadingSettings {
+                startOverlay()
+                AppModel.hideMainApp()
+            }
+        }
     }
     @Published var sysAudioVerified: Bool = false {
         didSet { saveSettings() }
@@ -97,6 +102,7 @@ final class AppModel: ObservableObject {
     let recorder = Recorder()
     private var sessionDir: URL? = nil
     private var rawPath: URL? = nil
+    private var currentMode: String = "transcript"
     private var liveProc: Process? = nil
     private var overlayProc: Process? = nil
     private var timer: Timer? = nil
@@ -106,6 +112,7 @@ final class AppModel: ObservableObject {
         loadSettings()
         refreshMicStatus()
         registerControlNotifications()
+        if onboardingDone { startOverlay() }
     }
 
     private var settingsFile: URL { baseDir.appendingPathComponent("settings.json") }
@@ -291,29 +298,82 @@ final class AppModel: ObservableObject {
 
     private func registerControlNotifications() {
         var t1: Int32 = 0, t2: Int32 = 0
-        notify_register_dispatch("dev.cyberjosef.nerdsidekiq.start", &t1, DispatchQueue.main) { _ in
+        let r1 = notify_register_dispatch("dev.cyberjosef.nerdsidekiq.start", &t1, DispatchQueue.main) { _ in
+            appLog("control: start notification")
             Task { @MainActor in AppModel.shared?.startCall(headless: true) }
         }
-        notify_register_dispatch("dev.cyberjosef.nerdsidekiq.finish", &t2, DispatchQueue.main) { _ in
+        let r2 = notify_register_dispatch("dev.cyberjosef.nerdsidekiq.finish", &t2, DispatchQueue.main) { _ in
+            appLog("control: finish notification")
             Task { @MainActor in AppModel.shared?.finishCall(headless: true) }
         }
+        var t3: Int32 = 0, t4: Int32 = 0
+        notify_register_dispatch("dev.cyberjosef.nerdsidekiq.settings", &t3, DispatchQueue.main) { _ in
+            Task { @MainActor in AppModel.shared?.openSettings() }
+        }
+        notify_register_dispatch("dev.cyberjosef.nerdsidekiq.quit", &t4, DispatchQueue.main) { _ in
+            appLog("control: quit notification")
+            Task { @MainActor in NSApp.terminate(nil) }
+        }
+        appLog("control notifications registered (start=\(r1) finish=\(r2))")
+    }
+
+    /// The overlay IS the app: once onboarding is done the Swift process
+    /// runs as an accessory — no Dock icon, no status window.
+    static func hideMainApp() {
+        NSApp.setActivationPolicy(.accessory)
+        for w in NSApp.windows where w.identifier?.rawValue == "main" { w.close() }
+    }
+
+    func openSettings() {
+        NSApp.activate(ignoringOtherApps: true)
+        if !NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
+            _ = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        }
+    }
+
+    /// Called from applicationWillTerminate: never leave a half-open
+    /// session behind (files stay in the folder, pipeline is skipped).
+    func shutdown() {
+        if case .recording = phase {
+            _ = recorder.stop()
+            if let p = liveProc, p.isRunning { p.terminate() }
+            appLog("quit while recording — session left unprocessed")
+        }
+        stopOverlay()
     }
 
     static weak var shared: AppModel?
 
+    /// session.json is written by the overlay right before it posts the
+    /// start notification. Legacy/headless starts without it get "transcript".
+    private func readSessionConfig() -> (mode: String, about: String, notes: String) {
+        let f = baseDir.appendingPathComponent("session.json")
+        guard let data = try? Data(contentsOf: f),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return ("transcript", "", "") }
+        return (obj["mode"] as? String ?? "transcript",
+                obj["about"] as? String ?? "",
+                obj["notes_path"] as? String ?? "")
+    }
+
+    nonisolated func postOverlay(_ obj: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+              let url = URL(string: "http://127.0.0.1:17865/assist") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.httpBody = data
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        URLSession.shared.dataTask(with: req).resume()
+    }
+
     func startCall(headless: Bool = false) {
         guard case .idle = phase else { return }
-        if headless {
-            let f = baseDir.appendingPathComponent("callname.txt")
-            callName = (try? String(contentsOf: f, encoding: .utf8))?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        }
+        let cfg = readSessionConfig()
+        currentMode = cfg.mode
         let df = DateFormatter()
         df.dateFormat = "yyyyMMdd-HHmmss"
-        let slug = callName.isEmpty ? "call" : callName.lowercased()
-            .replacingOccurrences(of: "[^a-z0-9а-яё]+", with: "-", options: .regularExpression)
         let dir = URL(fileURLWithPath: transcriptDir)
-            .appendingPathComponent("\(df.string(from: Date()))-\(slug)")
+            .appendingPathComponent("\(df.string(from: Date()))-\(cfg.mode)")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let raw = dir.appendingPathComponent("call.raw")
 
@@ -322,16 +382,29 @@ final class AppModel: ObservableObject {
         } catch {
             status = "Error: \(error)"
             appLog("start failed: \(error)")
+            postOverlay(["type": "phase", "phase": "error",
+                         "text": "Audio capture failed — check permissions."])
             return
         }
         sessionDir = dir
         rawPath = raw
         notionURL = nil
         phase = .recording(Date())
-        status = "Recording…"
-        appLog("recording started -> \(raw.path) (name: \(callName))")
-        startLiveLoop(dir: dir)
-        if hintsEnabled { startOverlay() }
+        status = cfg.mode == "prep" ? "Mock interview running…" : "Recording…"
+        appLog("recording started -> \(raw.path) (mode: \(cfg.mode))")
+        startOverlay()
+        if cfg.mode == "prep" {
+            let prep: [String: Any] = ["about": cfg.about, "notes_path": cfg.notes]
+            if let d = try? JSONSerialization.data(withJSONObject: prep,
+                                                   options: [.prettyPrinted]) {
+                try? d.write(to: dir.appendingPathComponent("prep.json"))
+            }
+            startLoop(script: "prep_loop.py", dir: dir, env: [:])
+        } else {
+            startLoop(script: "live_loop.py", dir: dir,
+                      env: ["NERDSIDEKIQ_MODE": cfg.mode])
+        }
+        postOverlay(["type": "phase", "phase": "recording", "mode": cfg.mode])
 
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
@@ -339,11 +412,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func startLiveLoop(dir: URL) {
-        let script = baseDir.appendingPathComponent("live_loop.py")
+    private func startLoop(script: String, dir: URL, env: [String: String]) {
+        let path = baseDir.appendingPathComponent(script)
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: pythonPath)
-        proc.arguments = [script.path, dir.path, callName]
+        proc.arguments = [path.path, dir.path]
+        if !env.isEmpty {
+            var e = ProcessInfo.processInfo.environment
+            env.forEach { e[$0] = $1 }
+            proc.environment = e
+        }
         let logFile = dir.appendingPathComponent("live.log")
         FileManager.default.createFile(atPath: logFile.path, contents: nil)
         let h = try? FileHandle(forWritingTo: logFile)
@@ -353,13 +431,13 @@ final class AppModel: ObservableObject {
         do {
             try proc.run()
             liveProc = proc
-            appLog("live loop started (pid \(proc.processIdentifier))")
+            appLog("\(script) started (pid \(proc.processIdentifier))")
         } catch {
-            appLog("live loop spawn failed: \(error)")
+            appLog("\(script) spawn failed: \(error)")
         }
     }
 
-    private func startOverlay() {
+    func startOverlay() {
         guard overlayProc == nil || !(overlayProc?.isRunning ?? false) else { return }
         let overlayDir = baseDir.appendingPathComponent("overlay")
         let electron = overlayDir.appendingPathComponent(
@@ -380,7 +458,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func stopOverlay() {
+    func stopOverlay() {
         if let p = overlayProc, p.isRunning { p.terminate() }
         overlayProc = nil
     }
@@ -413,11 +491,12 @@ final class AppModel: ObservableObject {
             return
         }
         phase = .processing
-        status = "Finishing — transcript, final summary, Notion…"
         micLevel = 0; sysLevel = 0
-        stopOverlay()
+        let mode = currentMode
+        status = mode == "prep" ? "Saving the practice session…"
+                                : "Finishing — transcript, final summary, Notion…"
+        postOverlay(["type": "phase", "phase": "processing"])
 
-        let name = callName
         let live = liveProc
         liveProc = nil
         Task.detached {
@@ -425,15 +504,27 @@ final class AppModel: ObservableObject {
                 live.terminate()          // SIGTERM: the loop saves its state
                 live.waitUntilExit()
             }
-            await MainActor.run { self.runPipeline(dir: dir, name: name) }
+            await MainActor.run {
+                if mode == "prep" {
+                    // practice sessions stay local: dialogue + audio in the
+                    // session folder, no Notion note, no re-transcription
+                    self.status = "Practice session saved: \(dir.lastPathComponent)"
+                    self.phase = .idle
+                    self.postOverlay(["type": "phase", "phase": "saved",
+                                      "title": "Practice session saved (local folder)"])
+                    appLog("prep session saved: \(dir.path)")
+                } else {
+                    self.runPipeline(dir: dir)
+                }
+            }
         }
     }
 
-    private func runPipeline(dir: URL, name: String) {
+    private func runPipeline(dir: URL) {
         let script = baseDir.appendingPathComponent("process_call.py")
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: pythonPath)
-        proc.arguments = [script.path, dir.path, name]
+        proc.arguments = [script.path, dir.path]
         let logFile = dir.appendingPathComponent("pipeline.log")
         FileManager.default.createFile(atPath: logFile.path, contents: nil)
         let h = try? FileHandle(forWritingTo: logFile)
@@ -451,9 +542,13 @@ final class AppModel: ObservableObject {
                     self.notionURL = url
                     self.status = "Saved to Notion (\(lang)): \(title)"
                     appLog("pipeline ok: \(url ?? "no url")")
+                    self.postOverlay(["type": "phase", "phase": "saved",
+                                      "title": title, "url": url ?? ""])
                 } else {
                     self.status = "Pipeline failed — see \(logFile.path)"
                     appLog("pipeline FAILED (exit \(p.terminationStatus)) — \(logFile.path)")
+                    self.postOverlay(["type": "phase", "phase": "error",
+                                      "text": "Pipeline failed — see pipeline.log"])
                 }
                 self.phase = .idle
             }
@@ -468,89 +563,34 @@ final class AppModel: ObservableObject {
     }
 }
 
-struct ContentView: View {
-    @ObservedObject var model: AppModel
+// The overlay is the whole UI. The Swift window exists only for the
+// first-run onboarding wizard; afterwards the app runs as an accessory.
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            TextField("Name hint, optional (e.g. Yandex HR)", text: $model.callName)
-                .textFieldStyle(.roundedBorder)
-                .disabled(model.phase != .idle)
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    // the app lives in the overlay — closing the (onboarding) window
+    // must not quit the process
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
 
-            HStack {
-                switch model.phase {
-                case .idle:
-                    Button {
-                        model.startCall()
-                    } label: {
-                        Label("Start Call", systemImage: "record.circle")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .controlSize(.large)
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
-                case .recording:
-                    Button {
-                        model.finishCall()
-                    } label: {
-                        Label("Finish Call  \(model.elapsed)", systemImage: "stop.circle")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .controlSize(.large)
-                    .buttonStyle(.borderedProminent)
-                case .processing:
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Processing…")
-                }
-            }
-
-            if case .recording = model.phase {
-                VStack(alignment: .leading, spacing: 4) {
-                    LevelBar(label: "You", value: model.micLevel)
-                    LevelBar(label: "Them", value: model.sysLevel)
-                }
-            }
-
-            Text(model.status)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-
-            if let url = model.notionURL, let u = URL(string: url) {
-                Link("Open note in Notion", destination: u)
-                    .font(.callout)
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            if AppModel.shared?.onboardingDone == true {
+                DispatchQueue.main.async { AppModel.hideMainApp() }
             }
         }
-        .padding(20)
-        .frame(width: 340)
     }
-}
 
-struct LevelBar: View {
-    let label: String
-    let value: Float
-
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(.caption)
-                .frame(width: 36, alignment: .leading)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3).fill(.quaternary)
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(.green)
-                        .frame(width: geo.size.width * CGFloat(value))
-                }
-            }
-            .frame(height: 6)
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            AppModel.shared?.shutdown()
         }
     }
 }
 
 @main
 struct NerdSidekiqApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model: AppModel
 
     init() {
@@ -562,9 +602,7 @@ struct NerdSidekiqApp: App {
 
     var body: some Scene {
         Window("NerdSidekiq", id: "main") {
-            if model.onboardingDone {
-                ContentView(model: model)
-            } else {
+            if !model.onboardingDone {
                 OnboardingView(model: model)
             }
         }

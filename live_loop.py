@@ -31,6 +31,9 @@ from calllib import (MEETING_NOTES_PAGE, RAW_RATE, RAW_FRAME_BYTES,
 
 CYCLE = float(os.environ.get("NERDSIDEKIQ_CYCLE_S", "10"))
 WINDOW = float(os.environ.get("NERDSIDEKIQ_WINDOW_S", "60"))
+# "transcript" = captions only, "sidekiq" = captions + streamed answer tips.
+# Empty (legacy headless start) falls back to the settings.json "hints" flag.
+MODE = os.environ.get("NERDSIDEKIQ_MODE", "")
 MAX_CONTEXT_CHARS = 6000
 OVERLAY_URL = "http://127.0.0.1:17865/assist"
 
@@ -114,7 +117,8 @@ class Live:
         self.push_captions()
         if self.ntoken:
             self.update_summary()
-        if load_settings().get("hints", False):
+        hints = MODE == "sidekiq" if MODE else load_settings().get("hints", False)
+        if hints:
             self.maybe_hint()
 
     def update_summary(self):
