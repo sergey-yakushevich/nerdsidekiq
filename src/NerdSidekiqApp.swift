@@ -71,6 +71,9 @@ final class AppModel: ObservableObject {
     @Published var rollingModel: String = "claude-opus-5" {
         didSet { saveSettings() }
     }
+    @Published var sttLanguage: String = "auto" {
+        didSet { saveSettings() }
+    }
     @Published var transcriptDir: String = baseDir.appendingPathComponent("recordings").path {
         didSet { saveSettings() }
     }
@@ -125,6 +128,7 @@ final class AppModel: ObservableObject {
             hintsEnabled = obj["hints"] as? Bool ?? false
             answerModel = obj["answer_model"] as? String ?? "claude-opus-5"
             rollingModel = obj["rolling_model"] as? String ?? "claude-opus-5"
+            sttLanguage = obj["stt_language"] as? String ?? "auto"
             transcriptDir = obj["transcript_dir"] as? String
                 ?? baseDir.appendingPathComponent("recordings").path
             onboardingDone = obj["onboarding_done"] as? Bool ?? false
@@ -137,6 +141,7 @@ final class AppModel: ObservableObject {
         let obj: [String: Any] = ["hints": hintsEnabled,
                                   "answer_model": answerModel,
                                   "rolling_model": rollingModel,
+                                  "stt_language": sttLanguage,
                                   "transcript_dir": transcriptDir,
                                   "onboarding_done": onboardingDone,
                                   "sys_audio_verified": sysAudioVerified]
@@ -317,18 +322,30 @@ final class AppModel: ObservableObject {
         appLog("control notifications registered (start=\(r1) finish=\(r2))")
     }
 
-    /// The overlay IS the app: once onboarding is done the Swift process
-    /// runs as an accessory — no Dock icon, no status window.
+    /// The overlay IS the UI: once onboarding is done the empty main window
+    /// closes. The Dock icon stays so the user can see the app is running;
+    /// clicking it re-opens the overlay (applicationShouldHandleReopen).
     static func hideMainApp() {
-        NSApp.setActivationPolicy(.accessory)
         for w in NSApp.windows where w.identifier?.rawValue == "main" { w.close() }
     }
 
     func openSettings() {
         NSApp.activate(ignoringOtherApps: true)
-        if !NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
-            _ = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        for name in ["showSettingsWindow:", "showPreferencesWindow:"] {
+            if NSApp.sendAction(Selector(name), to: nil, from: nil) {
+                appLog("settings opened via \(name)")
+                return
+            }
         }
+        // macOS 14+: the selectors may stop responding — trigger the real
+        // "Settings…" item (⌘,) from the app menu instead
+        if let appMenu = NSApp.mainMenu?.items.first?.submenu,
+           let idx = appMenu.items.firstIndex(where: { $0.keyEquivalent == "," }) {
+            appMenu.performActionForItem(at: idx)
+            appLog("settings opened via app-menu item")
+            return
+        }
+        appLog("settings: no way to open found")
     }
 
     /// Called from applicationWillTerminate: never leave a half-open
@@ -579,6 +596,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async { AppModel.hideMainApp() }
             }
         }
+    }
+
+    // Dock icon click -> bring the overlay back
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows: Bool) -> Bool {
+        MainActor.assumeIsolated {
+            AppModel.shared?.startOverlay()
+        }
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {

@@ -167,12 +167,22 @@ def ensure_whisper_server():
     log("whisper-server started (model stays warm)")
 
 
+def stt_language():
+    """Spoken-language lock: 'auto' lets whisper guess per window (can flip
+    on short/noisy windows); a fixed code ('en', 'ru') stops the flips.
+    Set in Settings ("stt_language") or via NERDSIDEKIQ_LANG."""
+    return (os.environ.get("NERDSIDEKIQ_LANG")
+            or load_settings().get("stt_language") or "auto")
+
+
 def _curl_transcribe(url, path, headers):
+    lang = stt_language()
+    args = ["-F", f"file=@{path}", "-F", "response_format=verbose_json"]
+    # whisper-server takes "auto"; the OpenAI API wants the flag omitted
+    if lang != "auto" or "127.0.0.1" in url:
+        args += ["-F", f"language={lang}"]
     p = subprocess.run(
-        ["curl", "-sS", "--max-time", "900", url] + headers + [
-         "-F", f"file=@{path}",
-         "-F", "response_format=verbose_json",
-         "-F", "language=auto"],
+        ["curl", "-sS", "--max-time", "900", url] + headers + args,
         capture_output=True, text=True)
     if p.returncode != 0:
         die(f"transcription request failed: {p.stderr[-500:]}")

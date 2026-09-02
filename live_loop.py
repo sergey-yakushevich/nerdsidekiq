@@ -29,8 +29,9 @@ from calllib import (MEETING_NOTES_PAGE, RAW_RATE, RAW_FRAME_BYTES,
                      load_settings, log, mean_volume_db, notion_req, notion_token,
                      rolling_model, rt, transcribe)
 
-CYCLE = float(os.environ.get("NERDSIDEKIQ_CYCLE_S", "10"))
+CYCLE = float(os.environ.get("NERDSIDEKIQ_CYCLE_S", "4"))
 WINDOW = float(os.environ.get("NERDSIDEKIQ_WINDOW_S", "60"))
+SUMMARY_EVERY = float(os.environ.get("NERDSIDEKIQ_SUMMARY_S", "30"))
 # "transcript" = captions only, "sidekiq" = captions + streamed answer tips.
 # Empty (legacy headless start) falls back to the settings.json "hints" flag.
 MODE = os.environ.get("NERDSIDEKIQ_MODE", "")
@@ -52,6 +53,7 @@ class Live:
         self.stopping = False
         self.answered = []          # questions already handled (normalized)
         self.hint_busy = False
+        self.last_summary_at = 0.0
 
     def setup_notion(self):
         if not self.ntoken:
@@ -115,11 +117,14 @@ class Live:
             f.write("\n".join(self.lines) + "\n")
         log(f"+{len(new_lines)} lines (total {len(self.lines)})")
         self.push_captions()
-        if self.ntoken:
-            self.update_summary()
         hints = MODE == "sidekiq" if MODE else load_settings().get("hints", False)
         if hints:
             self.maybe_hint()
+        # the rolling Notion summary is slow (a Claude call) — throttle it so
+        # captions and question detection stay on the fast CYCLE cadence
+        if self.ntoken and time.time() - self.last_summary_at >= SUMMARY_EVERY:
+            self.last_summary_at = time.time()
+            self.update_summary()
 
     def update_summary(self):
         context = "\n".join(self.lines)[-MAX_CONTEXT_CHARS:]

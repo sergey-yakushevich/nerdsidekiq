@@ -268,6 +268,20 @@ struct SettingsRootView: View {
                     .labelsHidden().frame(width: 180)
                 }
             }
+            SectionHeader(text: "Transcription")
+            SettingsCard {
+                CardRow(title: "Spoken language",
+                        subtitle: "Auto lets whisper guess per chunk and can flip "
+                                + "languages mid-call. Lock it if your calls are "
+                                + "always in one language.") {
+                    Picker("", selection: $model.sttLanguage) {
+                        Text("Auto").tag("auto")
+                        Text("English").tag("en")
+                        Text("Русский").tag("ru")
+                    }
+                    .labelsHidden().frame(width: 120)
+                }
+            }
         }
     }
 

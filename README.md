@@ -60,7 +60,9 @@ transcript (e.g. "Yandex HR — backend screen"). No fields to fill before a cal
 3. **Practice:** pick *Preparation*, describe the interview, optionally give a notes-file path, and answer the AI interviewer out loud. Pause ~5 seconds when you finish an answer. The dialogue is saved to `prep_transcript.txt` in the session folder.
 
 Settings (the ⚙ button on the start screen) let you change models (e.g. a
-cheaper model for the rolling summary), the transcript folder, and permissions.
+cheaper model for the rolling summary), lock the spoken language for
+transcription (stops mid-call language flips), the transcript folder, and
+permissions.
 
 > Note: after every rebuild of the app, macOS asks again for the
 > System Audio Recording permission on the first session — click Allow once.

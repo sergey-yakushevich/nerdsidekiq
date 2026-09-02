@@ -112,6 +112,10 @@
     padding: 5px 12px; border-radius: 999px; cursor: pointer;
   }
   .end-btn:hover { background: color-mix(in oklab, var(--danger) 26%, transparent); }
+  .end-btn .sq {
+    display: inline-block; width: 8px; height: 8px; flex: none;
+    border-radius: 2px; background: currentColor;
+  }
   .end-btn.home-mode {
     border-color: var(--border-strong); background: var(--accent);
     color: var(--foreground);
@@ -177,11 +181,20 @@
     -webkit-user-drag: none;
   }
   .hero-bubble {
-    position: absolute; top: -22px; right: -40px; z-index: 2;
+    position: absolute; top: -64px; right: -36px; z-index: 2;
     background: var(--card); border: 1px solid var(--border-strong);
-    border-radius: 12px 12px 12px 2px; padding: 8px 12px;
-    font-size: 12px; max-width: 190px; line-height: 1.4;
+    border-radius: 14px 14px 14px 3px; padding: 10px 14px;
+    font-size: 12.5px; max-width: 200px; line-height: 1.45;
     box-shadow: 0 8px 24px rgb(0 0 0 / .4);
+  }
+  .hero-bubble::after {           /* chat-bubble tail toward the mascot */
+    content: ""; position: absolute; left: 14px; bottom: -7px;
+    width: 12px; height: 12px;
+    background: var(--card);
+    border-left: 1px solid var(--border-strong);
+    border-bottom: 1px solid var(--border-strong);
+    transform: skewX(38deg) rotate(-45deg);
+    border-bottom-left-radius: 3px;
   }
   .hero-title { font-size: 22px; font-weight: 750; letter-spacing: -.01em; }
   .hero-tag { font-size: 12.5px; color: var(--muted-foreground); }
@@ -199,7 +212,6 @@
     transition: border-color .12s ease;
   }
   .mode-card:hover { border-color: rgb(255 219 77 / .5); }
-  .mode-card.fav { border-color: rgb(255 219 77 / .4); }
   .mode-card .row {
     display: flex; align-items: center; justify-content: space-between;
     width: 100%;
@@ -440,7 +452,7 @@
       <div class="nav-spacer"></div>
       <span class="rec-dot"></span>
       <span id="timer"></span>
-      <button class="end-btn" id="endBtn">■ End</button>
+      <button class="end-btn" id="endBtn"><span class="sq"></span>End</button>
       <button class="icon-btn" id="miniBtn" title="Minimize">–</button>
       <button class="icon-btn" id="maxBtn" title="Expand">⤢</button>
       <button class="icon-btn" id="settingsBtn" title="Settings">⚙</button>
@@ -465,8 +477,7 @@
           <div class="row"><span class="name">📝 Interview Transcript</span><span class="go">Start →</span></div>
           <div class="desc">Live captions of both sides. Transcript + AI-titled summary saved on finish.</div>
         </button>
-        <button class="mode-card fav" data-mode="sidekiq">
-          <span class="badge">His favorite</span>
+        <button class="mode-card" data-mode="sidekiq">
           <div class="row"><span class="name">🦸 Interview Sidekiq</span><span class="go">Start →</span></div>
           <div class="desc">Captions plus answers: questions detected automatically, talking points stream in beside them.</div>
         </button>
@@ -625,7 +636,7 @@
       $('navbar').classList.remove('loading');
       timerEl.textContent = '';
       finished = false;
-      endBtn.textContent = '■ End';
+      endBtn.innerHTML = '<span class="sq"></span>End';
       endBtn.classList.remove('home-mode');
     }
 
@@ -789,8 +800,7 @@
       const row = document.createElement('div');
       row.className = 'chat-coach';
       row.innerHTML = '<span class="avatar a32"></span>' +
-        '<div class="box"><div class="head"><span class="badge">Coach</span></div>' +
-        '<div class="body prose"></div></div>';
+        '<div class="box"><div class="body prose"></div></div>';
       chatAdd(row);
       return row.querySelector('.body');
     }
